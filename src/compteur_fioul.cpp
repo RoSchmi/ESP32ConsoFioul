@@ -8,6 +8,23 @@
 #include "RemoteDebug.h" //wireless debugging
 #include "ThingSpeak.h"
 
+char      *_EXFUN(strptime,     (const char *__restrict,
+				 const char *__restrict,
+				 struct tm *__restrict));
+_VOID      _EXFUN(tzset,	(_VOID));
+_VOID      _EXFUN(_tzset_r,	(struct _reent *));
+
+// Default stack size of 8192 byte may be not enough for some applications.
+// --> configure stack size dynamically from code to 16384
+// https://community.platformio.org/t/esp32-stack-configuration-reloaded/20994/4
+// Patch: Replace C:\Users\thisUser\.platformio\packages\framework-arduinoespressif32\cores\esp32\main.cpp
+// with the file 'main.cpp' from folder 'patches' of this repository, then use the following code to configure stack size
+// comment out the following three lines if you don't use the patch
+#if !(USING_DEFAULT_ARDUINO_LOOP_STACK_SIZE)
+  uint16_t USER_CONFIG_ARDUINO_LOOP_STACK_SIZE = 16384;
+#endif
+
+
 #define sec_to_ms(T) (T * 1000L)
 #define RG_THRESHOLD 10
 #define B_THRESHOLD 1
@@ -60,14 +77,17 @@ void setup(void)
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
   //TCS setup
+  
   Wire.begin();
+  /*
   if (!tcs.attach(Wire))
     Serial.println("ERROR: TCS34725 NOT FOUND !!!");
   tcs.integrationTime(50); // ms
   tcs.gain(TCS34725::Gain::X01);
+  */
 
   Debug.begin(WiFi.getHostname());
-
+  
   //load last total and daily value from thingspeak (in case of restart)
   loadLastCounterFromThingsSpeak();
   // ready to goto loop
@@ -80,6 +100,7 @@ void loop(void)
   {
     if (!burnerPreviouslyOn)
     {
+      Serial.println("not burnerPreviouslyOn");  
       //initialize times
       startTime = millis();
       burnerPreviouslyOn = true;
@@ -91,7 +112,7 @@ void loop(void)
     unsigned long currTime = millis();
     //burner turned off
     if (burnerPreviouslyOn)
-    {
+    {    
       //check if it was really on or only in preheating mode (status LED was flashing)
       unsigned long rTime = runningTime(startTime, currTime);
       if (rTime > sec_to_ms(5))
@@ -116,12 +137,15 @@ void loop(void)
           dailyBurnerTime += rTime / 1000;
           debugV("same day \n");
         }
-
+      
         //send to thingspeak
         if (currTime - lastConnectionTime > POSTING_INTERVAL)
         {
           sendThingSpeakhttpRequest(rTime / 1000, dailyBurnerTime, totalBurnerTime);
-        }
+          // RoSchmi
+          Serial.print("DailyBurnerTime: ");
+          Serial.println(dailyBurnerTime);
+        }         
       }
       else
       {
@@ -163,6 +187,12 @@ int wifiSetup(void)
 
 bool isBurnerOn()
 {
+  delay(1000);
+  
+  burnerPreviouslyOn = !burnerPreviouslyOn;
+
+  return !burnerPreviouslyOn;
+  /*
   while (!tcs.available())
   {
     // Serial.println("waiting for sensor to become available");
@@ -174,6 +204,7 @@ bool isBurnerOn()
     return true;
   }
   return false;
+  */
 }
 
 unsigned long runningTime(unsigned long startTime, unsigned long stopTime)
@@ -210,7 +241,7 @@ int getCurrentDay()
 {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo))
-  {
+  {   
     debugW("Failed to obtain time");
     return -1;
   }
@@ -238,6 +269,7 @@ void loadLastCounterFromThingsSpeak()
     Serial.printf("Problem loading counters from thingspeak. Status code : %d \n", statusCode);
   }
   struct tm tm;
+
   if (strptime(created_at.c_str(), "%y-%m-%dT%H:%M:%S", &tm) == NULL)
   {
     Serial.println("error parsing timestamp from ThingSpeak");
